@@ -6,23 +6,90 @@
     android:layout_height="match_parent"
     tools:context=".MainActivity">
 
-    <jp.co.cyberagent.android.gpuimage.GPUImageView
-        android:id="@+id/gpu_image_view"
+    <androidx.camera.view.PreviewView
+        android:id="@+id/viewFinder"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        app:gpuimage_show_loading="false"
-        app:gpuimage_surface_type="texture_view"
-        app:layout_constraintDimensionRatio="H,1:1"
-        app:layout_constraintEnd_toEndOf="parent"
-        app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toTopOf="parent" />
+        android:layout_height="match_parent" />
 
-    <com.wefika.flowlayout.FlowLayout
-        android:id="@+id/button_container"
+    <ImageView
+        android:id="@+id/imageOverlay"
         android:layout_width="match_parent"
-        android:layout_height="0dp"
-        app:layout_constraintBottom_toBottomOf="parent"
+        android:layout_height="match_parent" />
+
+    <Button
+        android:id="@+id/image_capture_red"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:layout_marginBottom="32dp"
+        android:backgroundTint="@color/red"
+        app:layout_constraintBottom_toTopOf="@id/image_capture_button"
+        app:layout_constraintEnd_toStartOf="@+id/image_capture_green"
+        app:layout_constraintHorizontal_chainStyle="spread"
+        app:layout_constraintStart_toStartOf="parent" />
+
+    <Button
+        android:id="@+id/image_capture_green"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:elevation="2dp"
+        android:backgroundTint="@color/green"
+        app:layout_constraintBottom_toBottomOf="@+id/image_capture_red"
+        app:layout_constraintEnd_toStartOf="@+id/image_capture_blue"
+        app:layout_constraintHorizontal_bias="0.5"
+        app:layout_constraintStart_toEndOf="@+id/image_capture_red"
+        app:layout_constraintTop_toTopOf="@+id/image_capture_red" />
+
+    <Button
+        android:id="@+id/image_capture_blue"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:elevation="2dp"
+        android:backgroundTint="@color/blue"
+        app:layout_constraintBottom_toBottomOf="@+id/image_capture_green"
         app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintHorizontal_bias="0.5"
+        app:layout_constraintStart_toEndOf="@+id/image_capture_green"
+        app:layout_constraintTop_toTopOf="@+id/image_capture_green" />
+
+    <Button
+        android:id="@+id/image_capture_white"
+        android:layout_width="60dp"
+        android:layout_height="60dp"
+        android:elevation="2dp"
+        android:backgroundTint="@color/white"
+        android:layout_marginTop="16dp"
         app:layout_constraintStart_toStartOf="parent"
-        app:layout_constraintTop_toBottomOf="@+id/gpu_image_view" />
+        app:layout_constraintEnd_toEndOf="parent"
+        app:layout_constraintTop_toBottomOf="@id/image_capture_green"/>
+
+    <Button
+        android:id="@+id/image_capture_button"
+        android:layout_width="110dp"
+        android:layout_height="110dp"
+        android:layout_marginEnd="50dp"
+        android:layout_marginBottom="50dp"
+        android:elevation="2dp"
+        android:text="@string/take_photo"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintEnd_toStartOf="@id/vertical_centerline"
+        app:layout_constraintLeft_toLeftOf="parent" />
+
+    <Button
+        android:id="@+id/image_camera_type"
+        android:layout_width="110dp"
+        android:layout_height="110dp"
+        android:layout_marginStart="50dp"
+        android:layout_marginBottom="50dp"
+        android:elevation="2dp"
+        android:text="@string/video"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toEndOf="@id/vertical_centerline" />
+
+    <androidx.constraintlayout.widget.Guideline
+        android:id="@+id/vertical_centerline"
+        android:layout_width="wrap_content"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        app:layout_constraintGuide_percent=".50" />
+
 </androidx.constraintlayout.widget.ConstraintLayout>
