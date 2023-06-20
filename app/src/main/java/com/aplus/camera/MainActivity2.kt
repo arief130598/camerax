@@ -1,21 +1,33 @@
 package com.aplus.camera
 
 import android.Manifest
-import android.annotation.SuppressLint
 import android.content.ContentValues
+import android.content.Context
 import android.content.pm.PackageManager
+import android.database.Cursor
 import android.graphics.Bitmap
+import android.graphics.BitmapFactory
+import android.graphics.Canvas
+import android.graphics.ColorMatrix
+import android.graphics.ColorMatrixColorFilter
+import android.graphics.Matrix
+import android.graphics.Paint
+import android.media.MediaScannerConnection
+import android.net.Uri
 import android.os.Build
-import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
+import android.os.Environment
 import android.provider.MediaStore
+import android.provider.OpenableColumns
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.ImageProxy
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
@@ -29,22 +41,27 @@ import androidx.camera.video.VideoRecordEvent
 import androidx.core.content.ContextCompat
 import androidx.core.content.PermissionChecker
 import com.aplus.camera.databinding.ActivityMain2Binding
-import jp.co.cyberagent.android.gpuimage.GPUImage
-import jp.co.cyberagent.android.gpuimage.GPUImageView
+import java.io.File
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.InputStream
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 
-class MainActivity2 : AppCompatActivity() {
+
+class MainActivity2 : AppCompatActivity(), ImageAnalysis.Analyzer {
     private lateinit var viewBinding: ActivityMain2Binding
 
     private var imageCapture: ImageCapture? = null
-
     private var videoCapture: VideoCapture<Recorder>? = null
     private var recording: Recording? = null
 
     private lateinit var cameraExecutor: ExecutorService
+    private lateinit var cameraProvider: ProcessCameraProvider
+
+    private var statePhoto = true
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -53,22 +70,38 @@ class MainActivity2 : AppCompatActivity() {
 
         // Request camera permissions
         if (allPermissionsGranted()) {
-            startCamera()
+            this.startPhoto()
         } else {
             requestPermissions()
         }
 
         // Set up the listeners for take photo and video capture buttons
-        viewBinding.imageCaptureButton.setOnClickListener { takePhoto() }
-        viewBinding.videoCaptureButton.setOnClickListener { captureVideo() }
+        viewBinding.imageCaptureButton.setOnClickListener {
+            if(statePhoto) {
+                takePhoto()
+            }else {
+                cameraProvider.unbindAll()
+                statePhoto = true
+                startPhoto()
+                takePhoto()
+            }
+        }
+
+        viewBinding.videoCaptureButton.setOnClickListener {
+            if(!statePhoto) {
+                captureVideo()
+            }else {
+                cameraProvider.unbindAll()
+                statePhoto = false
+                startVideo()
+                captureVideo()
+            }
+        }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
     }
 
     private fun takePhoto() {
-        // Get a stable reference of the modifiable image capture use case
-        val imageCapture = imageCapture ?: return
-
         // Create time stamped name and MediaStore entry.
         val name = SimpleDateFormat(FILENAME_FORMAT, Locale.US)
             .format(System.currentTimeMillis())
@@ -89,7 +122,7 @@ class MainActivity2 : AppCompatActivity() {
 
         // Set up image capture listener, which is triggered after photo has
         // been taken
-        imageCapture.takePicture(
+        imageCapture?.takePicture(
             outputOptions,
             ContextCompat.getMainExecutor(this),
             object : ImageCapture.OnImageSavedCallback {
@@ -97,9 +130,18 @@ class MainActivity2 : AppCompatActivity() {
                     Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
                 }
 
-                override fun
-                        onImageSaved(output: ImageCapture.OutputFileResults){
-                    val msg = "Photo capture succeeded: ${output.savedUri}"
+                override fun onImageSaved(output: ImageCapture.OutputFileResults){
+                    val theFile = getFile(this@MainActivity2, output.savedUri!!)
+                    val capturedBitmap = BitmapFactory.decodeFile(theFile.absolutePath)
+                    val customBitmap = toGrayscale(capturedBitmap)
+                    customBitmap?.let {
+                        output.savedUri?.let { existingImage ->
+                            contentResolver.delete(existingImage, null, null)
+                        }
+                        saveImage(name, it)
+                    }
+
+                    val msg = "Photo Saved on Picture/CameraX"
                     Toast.makeText(baseContext, msg, Toast.LENGTH_SHORT).show()
                     Log.d(TAG, msg)
                 }
@@ -175,13 +217,76 @@ class MainActivity2 : AppCompatActivity() {
             }
     }
 
-    @SuppressLint("UnsafeOptInUsageError")
-    private fun startCamera() {
-        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+    override fun analyze(image: ImageProxy) = with(viewBinding) {
+        runOnUiThread {
+            // image processing here for the current frame
+            Log.d("TAG", "analyze: got the frame at: " + image.imageInfo.timestamp)
+            var bitmap: Bitmap? = viewFinder.bitmap
+            image.close()
+            if(bitmap != null) {
+                bitmap = toGrayscale(bitmap)
+                imageOverlay.setImageBitmap(bitmap)
+            }
+        }
+    }
 
+    private fun toGrayscale(bmpOriginal: Bitmap): Bitmap? {
+        val height: Int = bmpOriginal.height
+        val width: Int = bmpOriginal.width
+        val bmpGrayscale = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+        val c = Canvas(bmpGrayscale)
+        val paint = Paint()
+        val cm = ColorMatrix()
+        cm.setSaturation(0f)
+        val f = ColorMatrixColorFilter(cm)
+        paint.colorFilter = f
+        c.drawBitmap(bmpOriginal, 0f, 0f, paint)
+        return bmpGrayscale
+    }
+
+    private fun startPhoto() {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
         cameraProviderFuture.addListener({
             // Used to bind the lifecycle of cameras to the lifecycle owner
-            val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
+            cameraProvider = cameraProviderFuture.get()
+
+            // Preview
+            val preview = Preview.Builder()
+                .build()
+                .also {
+                    it.setSurfaceProvider(viewBinding.viewFinder.surfaceProvider)
+                }
+
+            imageCapture = ImageCapture.Builder()
+                .build()
+
+            // Select back camera as a default
+            val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+
+            // Image analysis use case
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
+
+            imageAnalysis.setAnalyzer(cameraExecutor, this)
+
+            try {
+                // Bind use cases to camera
+                cameraProvider.bindToLifecycle(
+                    this, cameraSelector, preview, imageAnalysis, imageCapture)
+
+            } catch(exc: Exception) {
+                Log.e(TAG, "Use case binding failed", exc)
+            }
+
+        }, ContextCompat.getMainExecutor(this))
+    }
+
+    private fun startVideo () {
+        val cameraProviderFuture = ProcessCameraProvider.getInstance(this)
+        cameraProviderFuture.addListener({
+            // Used to bind the lifecycle of cameras to the lifecycle owner
+            cameraProvider = cameraProviderFuture.get()
 
             // Preview
             val preview = Preview.Builder()
@@ -196,19 +301,20 @@ class MainActivity2 : AppCompatActivity() {
                 .build()
             videoCapture = VideoCapture.withOutput(recorder)
 
-            imageCapture = ImageCapture.Builder()
-                .build()
-
             // Select back camera as a default
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-            try {
-                // Unbind use cases before rebinding
-                cameraProvider.unbindAll()
+            // Image analysis use case
+            val imageAnalysis = ImageAnalysis.Builder()
+                .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
+                .build()
 
+            imageAnalysis.setAnalyzer(cameraExecutor, this)
+
+            try {
                 // Bind use cases to camera
                 cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture, videoCapture)
+                    this, cameraSelector, preview, imageAnalysis, videoCapture)
 
             } catch(exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
@@ -241,6 +347,7 @@ class MainActivity2 : AppCompatActivity() {
             }.toTypedArray()
     }
 
+
     private val activityResultLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions())
@@ -256,11 +363,93 @@ class MainActivity2 : AppCompatActivity() {
                     "Permission request denied",
                     Toast.LENGTH_SHORT).show()
             } else {
-                startCamera()
+                this.startPhoto()
             }
         }
 
     private fun requestPermissions() {
         activityResultLauncher.launch(REQUIRED_PERMISSIONS)
+    }
+
+    @Throws(IOException::class)
+    fun getFile(context: Context, uri: Uri): File {
+        val destinationFilename =
+            File(context.filesDir.path + File.separatorChar + queryName(context, uri))
+        try {
+            context.contentResolver.openInputStream(uri).use { ins ->
+                createFileFromStream(
+                    ins!!,
+                    destinationFilename
+                )
+            }
+        } catch (ex: java.lang.Exception) {
+            Log.e("Save File", ex.message!!)
+            ex.printStackTrace()
+        }
+        return destinationFilename
+    }
+
+
+    fun createFileFromStream(ins: InputStream, destination: File?) {
+        try {
+            FileOutputStream(destination).use { os ->
+                val buffer = ByteArray(4096)
+                var length: Int
+                while (ins.read(buffer).also { length = it } > 0) {
+                    os.write(buffer, 0, length)
+                }
+                os.flush()
+            }
+        } catch (ex: java.lang.Exception) {
+            Log.e("Save File", ex.message!!)
+            ex.printStackTrace()
+        }
+    }
+
+    private fun queryName(context: Context, uri: Uri): String {
+        val returnCursor: Cursor = context.contentResolver.query(uri, null, null, null, null)!!
+        val nameIndex: Int = returnCursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        returnCursor.moveToFirst()
+        val name: String = returnCursor.getString(nameIndex)
+        returnCursor.close()
+        return name
+    }
+
+    fun saveImage(name: String, bitmap: Bitmap) {
+        try {
+            val fileName = "$name.jpeg"
+            val values = ContentValues()
+            values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
+            values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpeg")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                values.put(MediaStore.MediaColumns.RELATIVE_PATH, "Pictures/CameraX-Image")
+                values.put(MediaStore.MediaColumns.IS_PENDING, 1)
+            } else {
+                val directory =
+                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
+                val file = File(directory, fileName)
+                values.put(MediaStore.MediaColumns.DATA, file.absolutePath)
+            }
+            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
+            contentResolver.openOutputStream(uri!!).use { output ->
+                val bm = rotateBitmap(bitmap, 90F)
+                bm?.compress(Bitmap.CompressFormat.JPEG, 100, output)
+            }
+            // release pending status of the file
+            values.clear()
+            values.put(MediaStore.Images.Media.IS_PENDING, 0)
+            contentResolver.update(uri, values, null, null)
+
+            // notify media scanner there's a new picture
+            MediaScannerConnection.scanFile(this, arrayOf(uri.toString()), null, null)
+        } catch (e: java.lang.Exception) {
+            Log.d("onBtnSavePng", e.toString()) // java.io.IOException: Operation not permitted
+        }
+    }
+
+    private fun rotateBitmap(source: Bitmap, angle: Float): Bitmap? {
+        val matrix = Matrix()
+        matrix.postRotate(angle)
+        return Bitmap.createBitmap(source, 0, 0, source.width, source.height, matrix, true)
     }
 }
