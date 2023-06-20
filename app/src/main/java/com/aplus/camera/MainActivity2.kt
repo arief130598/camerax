@@ -6,17 +6,17 @@ import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.os.Build
+import androidx.appcompat.app.AppCompatActivity
 import android.os.Bundle
-import android.os.Environment
 import android.provider.MediaStore
 import android.util.Log
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
+import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.camera.video.FallbackStrategy
 import androidx.camera.video.MediaStoreOutputOptions
@@ -31,13 +31,10 @@ import androidx.core.content.PermissionChecker
 import com.aplus.camera.databinding.ActivityMain2Binding
 import jp.co.cyberagent.android.gpuimage.GPUImage
 import jp.co.cyberagent.android.gpuimage.GPUImageView
-import jp.co.cyberagent.android.gpuimage.filter.GPUImageGrayscaleFilter
-import java.io.File
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
-
 
 class MainActivity2 : AppCompatActivity() {
     private lateinit var viewBinding: ActivityMain2Binding
@@ -45,24 +42,14 @@ class MainActivity2 : AppCompatActivity() {
     private var imageCapture: ImageCapture? = null
 
     private var videoCapture: VideoCapture<Recorder>? = null
-    private lateinit var converter: YuvToRgbConverter
-    private lateinit var gpuImageView: GPUImageView
     private var recording: Recording? = null
 
-    private var bitmap: Bitmap? = null
     private lateinit var cameraExecutor: ExecutorService
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         viewBinding = ActivityMain2Binding.inflate(layoutInflater)
         setContentView(viewBinding.root)
-
-        converter = YuvToRgbConverter(this)
-        gpuImageView = viewBinding.viewFinder
-
-        // The activity is locked to portrait mode. We only need to correct for sensor rotation.
-        gpuImageView.rotation = 90F
-        gpuImageView.setScaleType(GPUImage.ScaleType.CENTER_CROP)
 
         // Request camera permissions
         if (allPermissionsGranted()) {
@@ -72,15 +59,10 @@ class MainActivity2 : AppCompatActivity() {
         }
 
         // Set up the listeners for take photo and video capture buttons
-        viewBinding.imageCaptureButton.setOnClickListener { takePhoto2() }
+        viewBinding.imageCaptureButton.setOnClickListener { takePhoto() }
         viewBinding.videoCaptureButton.setOnClickListener { captureVideo() }
 
         cameraExecutor = Executors.newSingleThreadExecutor()
-    }
-
-    private fun takePhoto2() {
-        val image = gpuImageView.capture()
-        onBtnSavePng(image)
     }
 
     private fun takePhoto() {
@@ -201,6 +183,13 @@ class MainActivity2 : AppCompatActivity() {
             // Used to bind the lifecycle of cameras to the lifecycle owner
             val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
 
+            // Preview
+            val preview = Preview.Builder()
+                .build()
+                .also {
+                    it.setSurfaceProvider(viewBinding.viewFinder.surfaceProvider)
+                }
+
             val recorder = Recorder.Builder()
                 .setQualitySelector(QualitySelector.from(Quality.HIGHEST,
                     FallbackStrategy.higherQualityOrLowerThan(Quality.SD)))
@@ -212,16 +201,6 @@ class MainActivity2 : AppCompatActivity() {
 
             // Select back camera as a default
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
-            gpuImageView.filter = GPUImageGrayscaleFilter()
-            val imageAnalysis = ImageAnalysis.Builder().setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST).build()
-            imageAnalysis.setAnalyzer(cameraExecutor) {
-                val bitmap = allocateBitmapIfNecessary(it.width, it.height)
-                it.image?.let { it1 -> converter.yuvToRgb(it1, bitmap) }
-                it.close()
-                gpuImageView.post {
-                    gpuImageView.setImage(bitmap)
-                }
-            }
 
             try {
                 // Unbind use cases before rebinding
@@ -229,7 +208,7 @@ class MainActivity2 : AppCompatActivity() {
 
                 // Bind use cases to camera
                 cameraProvider.bindToLifecycle(
-                    this, cameraSelector, imageAnalysis, imageCapture, videoCapture)
+                    this, cameraSelector, preview, imageCapture, videoCapture)
 
             } catch(exc: Exception) {
                 Log.e(TAG, "Use case binding failed", exc)
@@ -281,38 +260,7 @@ class MainActivity2 : AppCompatActivity() {
             }
         }
 
-    private fun allocateBitmapIfNecessary(width: Int, height: Int): Bitmap {
-        if (bitmap == null || bitmap!!.width != width || bitmap!!.height != height) {
-            bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
-        }
-        return bitmap!!
-    }
-
     private fun requestPermissions() {
         activityResultLauncher.launch(REQUIRED_PERMISSIONS)
-    }
-
-    fun onBtnSavePng(bitmap: Bitmap) {
-        try {
-            val fileName: String = "test1245" + ".jpg"
-            val values = ContentValues()
-            values.put(MediaStore.Images.Media.DISPLAY_NAME, fileName)
-            values.put(MediaStore.Images.Media.MIME_TYPE, "image/jpg")
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                values.put(MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/")
-                values.put(MediaStore.MediaColumns.IS_PENDING, 1)
-            } else {
-                val directory =
-                    Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM)
-                val file = File(directory, fileName)
-                values.put(MediaStore.MediaColumns.DATA, file.absolutePath)
-            }
-            val uri = contentResolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values)
-            contentResolver.openOutputStream(uri!!).use { output ->
-                bitmap.compress(Bitmap.CompressFormat.JPEG, 100, output)
-            }
-        } catch (e: java.lang.Exception) {
-            Log.d("onBtnSavePng", e.toString()) // java.io.IOException: Operation not permitted
-        }
     }
 }
